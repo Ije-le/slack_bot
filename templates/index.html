@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>PG County Road Closures</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f4f4f4; display: flex; flex-direction: column; height: 100vh; }
+        header {
+            background: #1a1a2e;
+            color: white;
+            padding: 16px 24px;
+            flex-shrink: 0;
+        }
+        header h1 { font-size: 1.4rem; }
+        header p { font-size: 0.85rem; color: #aaa; margin-top: 4px; }
+        #main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        #sidebar {
+            width: 320px;
+            background: white;
+            overflow-y: auto;
+            border-right: 1px solid #ddd;
+            flex-shrink: 0;
+        }
+        #sidebar h2 {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #888;
+            padding: 14px 16px 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .closure-card {
+            padding: 14px 16px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .closure-card:hover { background: #f9f9f9; }
+        .closure-card.active { background: #f0f4ff; border-left: 3px solid #1a1a2e; }
+        .closure-card .incident {
+            font-size: 0.88rem;
+            font-weight: bold;
+            color: #1a1a2e;
+            margin-bottom: 5px;
+        }
+        .closure-card .meta {
+            font-size: 0.78rem;
+            color: #666;
+            margin-top: 2px;
+        }
+        .badge {
+            display: inline-block;
+            font-size: 0.68rem;
+            padding: 2px 7px;
+            border-radius: 12px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .badge.new { background: #1a1a2e; color: white; }
+        .badge.updated { background: #f39c12; color: white; }
+        #map { flex: 1; }
+        .leaflet-popup-content b { display: block; margin-bottom: 6px; font-size: 0.95rem; }
+        .leaflet-popup-content span { display: block; font-size: 0.82rem; color: #444; margin-top: 3px; }
+        #no-closures {
+            padding: 20px 16px;
+            font-size: 0.85rem;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>PG County Road Closures</h1>
+        <p>Prince George's County, Maryland &mdash; Live updates</p>
+    </header>
+    <div id="main">
+        <div id="sidebar">
+            <h2>Active Closures</h2>
+            <div id="closure-list"></div>
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map').setView([38.9, -76.85], 11);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        const newIcon = L.divIcon({
+            className: '',
+            html: '<div style="background:#111;width:22px;height:22px;border-radius:50%;border:3px solid #ffe600;box-shadow:0 0 8px rgba(0,0,0,0.7)"></div>',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+        });
+
+        const updatedIcon = L.divIcon({
+            className: '',
+            html: '<div style="background:#111;width:22px;height:22px;border-radius:50%;border:3px solid #00e5ff;box-shadow:0 0 8px rgba(0,0,0,0.7)"></div>',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+        });
+
+        function loadClosures() {
+            fetch('/api/closures')
+                .then(res => res.json())
+                .then(data => {
+                    const list = document.getElementById('closure-list');
+                    list.innerHTML = '';
+
+                    if (data.length === 0) {
+                        list.innerHTML = '<div id="no-closures">No active closures found.</div>';
+                        return;
+                    }
+
+                    data.forEach((c, i) => {
+                        const isUpdated = c.updated && c.updated !== c.created;
+                        const icon = isUpdated ? updatedIcon : newIcon;
+                        const badgeLabel = isUpdated ? 'Updated' : 'New';
+                        const badgeClass = isUpdated ? 'updated' : 'new';
+
+                        const popup = `
+                            <span class="badge ${badgeClass}">${badgeLabel}</span>
+                            <b>${c.incident}</b>
+                            ${c.direction ? `<span><b>Direction:</b> ${c.direction}</span>` : ''}
+                            ${c.lanes ? `<span><b>Lanes:</b> ${c.lanes}</span>` : ''}
+                            ${c.created ? `<span><b>Created:</b> ${c.created}</span>` : ''}
+                            ${c.updated ? `<span><b>Updated:</b> ${c.updated}</span>` : ''}
+                        `;
+
+                        const marker = L.marker([c.lat, c.lon], { icon })
+                            .addTo(map)
+                            .bindPopup(popup);
+
+                        // Sidebar card
+                        const card = document.createElement('div');
+                        card.className = 'closure-card';
+                        card.dataset.index = i;
+                        card.innerHTML = `
+                            <span class="badge ${badgeClass}">${badgeLabel}</span>
+                            <div class="incident">${c.incident}</div>
+                            ${c.direction ? `<div class="meta">Direction: ${c.direction}</div>` : ''}
+                            ${c.created ? `<div class="meta">${c.created}</div>` : ''}
+                        `;
+                        card.addEventListener('click', () => {
+                            document.querySelectorAll('.closure-card').forEach(el => el.classList.remove('active'));
+                            card.classList.add('active');
+                            map.setView([c.lat, c.lon], 14);
+                            marker.openPopup();
+                        });
+                        list.appendChild(card);
+                    });
+                });
+        }
+
+        loadClosures();
+        setInterval(() => { location.reload(); }, 3600000);
+    </script>
+</body>
+</html>
