@@ -1,7 +1,8 @@
 import os
 import re
-import time
+import json
 import requests
+from datetime import datetime
 from slack import WebClient
 from slack.errors import SlackApiError
 
@@ -9,10 +10,21 @@ SLACK_TOKEN = os.environ.get('SLACK_API_TOKEN')
 CHANNEL = "slack-bots"
 API_URL = "https://opendata.maryland.gov/resource/nigh-m2sg.json"
 COUNTY = "Prince George's"
-POLL_INTERVAL = 3600  # 1 hour
+SEEN_FILE = "seen.json"
 
 client = WebClient(token=SLACK_TOKEN)
-seen = {}  # closure_id -> last updated timestamp
+
+
+def load_seen():
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_seen(seen):
+    with open(SEEN_FILE, "w") as f:
+        json.dump(seen, f)
 
 
 def is_since_2026(closure):
@@ -22,7 +34,7 @@ def is_since_2026(closure):
 
 def fetch_closures():
     try:
-        response = requests.get(API_URL, params={"county": COUNTY}, timeout=10)
+        response = requests.get(API_URL, params={"county": COUNTY, "$limit": 1000}, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
@@ -31,7 +43,7 @@ def fetch_closures():
 
 
 def closure_id(closure):
-    return (closure.get("incident"), closure.get("lat"), closure.get("long"))
+    return f"{closure.get('incident')}|{closure.get('lat')}|{closure.get('long')}"
 
 
 def format_message(closure, updated=False):
@@ -40,7 +52,7 @@ def format_message(closure, updated=False):
     lanes = closure.get("lanes", "")
     updated_time = closure.get("updated", "")
 
-    prefix = ":arrows_counterclockwise: *Road Closure Update*" if updated else ":rotating_light: *Road Closure - Prince George's County*"
+    prefix = ":arrows_counterclockwise: *Road Closure Update - Prince George's County*" if updated else ":rotating_light: *New Road Closure - Prince George's County*"
     lines = [prefix, f"*Incident:* {incident}"]
     if direction:
         lines.append(f"*Direction:* {direction}")
@@ -54,37 +66,41 @@ def format_message(closure, updated=False):
 def post_message(text):
     try:
         client.chat_postMessage(channel=CHANNEL, text=text)
-        print("Posted closure to Slack.")
+        print("Posted to Slack.")
     except SlackApiError as e:
         print(f"Slack error: {e.response['error']}")
 
 
 def main():
-    print("Starting road closure bot...")
-
-    # On first run, post all April 2026 closures and track all current ones
+    print(f"Running at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    seen = load_seen()
     closures = fetch_closures()
-    april_count = 0
+    first_run = len(seen) == 0
+
+    posted = 0
     for closure in closures:
         cid = closure_id(closure)
-        seen[cid] = closure.get("updated")
-        if is_since_2026(closure):
-            post_message(format_message(closure))
-            april_count += 1
-    print(f"Posted {april_count} PG County closure(s) since 2026. Now watching for new ones...")
+        current_updated = closure.get("updated")
 
-    while True:
-        time.sleep(POLL_INTERVAL)
-        closures = fetch_closures()
-        for closure in closures:
-            cid = closure_id(closure)
-            current_updated = closure.get("updated")
-            if cid not in seen:
-                seen[cid] = current_updated
+        if first_run:
+            # First run: post all closures since 2026
+            if is_since_2026(closure):
                 post_message(format_message(closure))
-            elif seen[cid] != current_updated:
-                seen[cid] = current_updated
-                post_message(format_message(closure, updated=True))
+                posted += 1
+            seen[cid] = current_updated
+        elif cid not in seen:
+            # New closure
+            post_message(format_message(closure))
+            seen[cid] = current_updated
+            posted += 1
+        elif seen[cid] != current_updated:
+            # Updated closure
+            post_message(format_message(closure, updated=True))
+            seen[cid] = current_updated
+            posted += 1
+
+    save_seen(seen)
+    print(f"Done. Posted {posted} message(s).")
 
 
 if __name__ == "__main__":
