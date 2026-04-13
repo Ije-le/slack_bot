@@ -3,8 +3,8 @@ import re
 import json
 import requests
 from datetime import datetime
-from slack import WebClient
-from slack.errors import SlackApiError
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
 
 SLACK_TOKEN = os.environ.get('SLACK_API_TOKEN')
 CHANNEL = "slack-bots"

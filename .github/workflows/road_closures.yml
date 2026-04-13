@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests slack-sdk
+        run: pip install requests slack-sdk aiohttp
 
       - name: Restore seen closures cache
         uses: actions/cache@v4
