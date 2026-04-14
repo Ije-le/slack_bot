@@ -2,7 +2,7 @@ import os
 import re
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
@@ -27,9 +27,18 @@ def save_seen(seen):
         json.dump(seen, f)
 
 
-def is_since_2026(closure):
+def is_created_recently(closure, hours=2):
     created = closure.get("created", "")
-    return bool(re.search(r"\d{2}/\d{2}/202[6-9]", created))
+    match = re.search(r"(\d{2}/\d{2}/\d{4} \d{1,2}:\d{2} [AP]M)", created)
+    if not match:
+        return False
+    try:
+        dt = datetime.strptime(match.group(1), "%m/%d/%Y %I:%M %p")
+        dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return (now - dt) <= timedelta(hours=hours)
+    except ValueError:
+        return False
 
 
 def fetch_closures():
@@ -75,28 +84,22 @@ def main():
     print(f"Running at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     seen = load_seen()
     closures = fetch_closures()
-    first_run = len(seen) == 0
 
     posted = 0
     for closure in closures:
         cid = closure_id(closure)
         current_updated = closure.get("updated")
 
-        if first_run:
-            # First run: post all closures since 2026
-            if is_since_2026(closure):
+        if cid not in seen:
+            # New closure — only post if created in the last 2 hours
+            seen[cid] = current_updated
+            if is_created_recently(closure):
                 post_message(format_message(closure))
                 posted += 1
-            seen[cid] = current_updated
-        elif cid not in seen:
-            # New closure
-            post_message(format_message(closure))
-            seen[cid] = current_updated
-            posted += 1
         elif seen[cid] != current_updated:
-            # Updated closure
-            post_message(format_message(closure, updated=True))
+            # Existing closure that was updated
             seen[cid] = current_updated
+            post_message(format_message(closure, updated=True))
             posted += 1
 
     save_seen(seen)
