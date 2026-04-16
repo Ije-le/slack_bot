@@ -27,25 +27,50 @@ def save_seen(seen):
         json.dump(seen, f)
 
 
-def is_created_recently(closure, hours=2):
-    created = closure.get("created", "")
-    match = re.search(r"(\d{2}/\d{2}/\d{4} \d{1,2}:\d{2} [AP]M)", created)
+def parse_created_date(created_str):
+    """Parse created date string to datetime object."""
+    if not created_str:
+        return None
+    match = re.search(r"(\d{2}/\d{2}/\d{4} \d{1,2}:\d{2} [AP]M)", created_str)
     if not match:
-        return False
+        return None
     try:
         dt = datetime.strptime(match.group(1), "%m/%d/%Y %I:%M %p")
-        dt = dt.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        return (now - dt) <= timedelta(hours=hours)
+        return dt.replace(tzinfo=timezone.utc)
     except ValueError:
+        return None
+
+
+def format_datetime(dt):
+    """Format datetime object as 'Thursday, April 16 at 11:20 a.m.'"""
+    if not isinstance(dt, datetime):
+        return None
+    formatted = dt.strftime("%A, %B %d at %I:%M %p")
+    # Convert to lowercase and format AM/PM with periods
+    formatted = formatted.replace("AM", "a.m.").replace("PM", "p.m.")
+    return formatted
+
+
+def is_created_recently(closure, hours=2):
+    created = closure.get("created")
+    if not isinstance(created, datetime):
         return False
+    now = datetime.now(timezone.utc)
+    return (now - created) <= timedelta(hours=hours)
 
 
 def fetch_closures():
     try:
         response = requests.get(API_URL, params={"county": COUNTY, "$limit": 1000}, timeout=10)
         response.raise_for_status()
-        return response.json()
+        closures = response.json()
+        # Convert created and updated fields to datetime objects
+        for closure in closures:
+            if "created" in closure:
+                closure["created"] = parse_created_date(closure["created"])
+            if "updated" in closure:
+                closure["updated"] = parse_created_date(closure["updated"])
+        return closures
     except requests.RequestException as e:
         print(f"Error fetching data: {e}")
         return []
@@ -59,7 +84,8 @@ def format_message(closure, updated=False):
     incident = closure.get("incident", "No details available")
     direction = closure.get("direction", "")
     lanes = closure.get("lanes", "")
-    updated_time = closure.get("updated", "")
+    updated_time = closure.get("updated")
+    formatted_time = format_datetime(updated_time) if updated_time else ""
 
     prefix = ":arrows_counterclockwise: *Road Closure Update - Prince George's County*" if updated else ":rotating_light: *New Road Closure - Prince George's County*"
     lines = [prefix, f"*Incident:* {incident}"]
@@ -67,8 +93,8 @@ def format_message(closure, updated=False):
         lines.append(f"*Direction:* {direction}")
     if lanes:
         lines.append(f"*Lanes:* {lanes}")
-    if updated_time:
-        lines.append(f"*Updated:* {updated_time}")
+    if formatted_time:
+        lines.append(f"*Updated:* {formatted_time}")
     return "\n".join(lines)
 
 
